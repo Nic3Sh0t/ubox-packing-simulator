@@ -210,13 +210,18 @@ export function FurnitureObject({ item, containerDims, otherItems }: FurnitureOb
     }
   }, [isSelected, item, containerDims, otherItems, updateItemPosition, updateItemRotation, transformMode])
 
-  const onClick = (e: ThreeEvent<MouseEvent>) => { e.stopPropagation(); selectItem(item.id) }
+  const onPointerDown = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation()
+    // Only select on left mouse button, and skip if clicking the gizmo itself
+    if (e.button !== 0) return
+    if (!isSelected) selectItem(item.id)
+  }
   const Shape = item.shape === 'lshape' ? LShapeShape : item.shape === 'cylinder' ? CylinderShape : BoxShape
 
   return (
     <>
       <group ref={groupRef} position={scenePos} rotation={item.rotation}
-        onClick={onClick}
+        onPointerDown={onPointerDown}
         onPointerOver={(e) => { e.stopPropagation(); setHovered(true) }}
         onPointerOut={() => setHovered(false)}
       >

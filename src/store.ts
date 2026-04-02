@@ -109,6 +109,80 @@ let containerIdCounter = 0
 function newContainerId() { return `c-${++containerIdCounter}` }
 function newItemId() { return `item-${++itemIdCounter}` }
 
+// ─── Auto-placement ────────────────────────────────────────────────────────
+
+function itemAABB(cx: number, cy: number, cz: number, item: FurnitureItem) {
+  const hx = item.shape === 'cylinder' ? (item.diameter || item.length) / 2 : item.length / 2
+  const hy = item.height / 2
+  const hz = item.shape === 'cylinder' ? (item.diameter || item.length) / 2 : item.width / 2
+  return { minX: cx - hx, maxX: cx + hx, minY: cy - hy, maxY: cy + hy, minZ: cz - hz, maxZ: cz + hz }
+}
+
+function boxesOverlap(
+  ax: number, ay: number, az: number, ahx: number, ahy: number, ahz: number,
+  bx: number, by: number, bz: number, bhx: number, bhy: number, bhz: number,
+): boolean {
+  return (
+    ax - ahx < bx + bhx && ax + ahx > bx - bhx &&
+    ay - ahy < by + bhy && ay + ahy > by - bhy &&
+    az - ahz < bz + bhz && az + ahz > bz - bhz
+  )
+}
+
+function findFreePosition(
+  hx: number, hz: number, hy: number,
+  dims: ContainerDims, existing: FurnitureItem[],
+): [number, number, number] {
+  const step = 4 // scan in 4-inch increments
+  const y = hy // always place on the floor first
+
+  // Try center first
+  if (!hasCollision(0, y, 0, hx, hy, hz, existing)) return [0, y, 0]
+
+  // Scan outward from center in a grid on the floor
+  const maxX = dims.length / 2 - hx
+  const maxZ = dims.width / 2 - hz
+  for (let r = step; r <= Math.max(dims.length, dims.width); r += step) {
+    for (let x = -maxX; x <= maxX; x += step) {
+      for (let z = -maxZ; z <= maxZ; z += step) {
+        if (Math.abs(x) > r && Math.abs(z) > r) continue // expand outward
+        if (x < -maxX || x > maxX || z < -maxZ || z > maxZ) continue
+        if (!hasCollision(x, y, z, hx, hy, hz, existing)) return [x, y, z]
+      }
+    }
+  }
+
+  // Try stacking: scan Y layers above the floor
+  for (let ly = hy + step; ly <= dims.height - hy; ly += step) {
+    for (let x = -maxX; x <= maxX; x += step) {
+      for (let z = -maxZ; z <= maxZ; z += step) {
+        if (!hasCollision(x, ly, z, hx, hy, hz, existing)) return [x, ly, z]
+      }
+    }
+  }
+
+  // Fallback: center (will overlap but user can move it)
+  return [0, y, 0]
+}
+
+function hasCollision(
+  cx: number, cy: number, cz: number,
+  hx: number, hy: number, hz: number,
+  existing: FurnitureItem[],
+): boolean {
+  for (const other of existing) {
+    const ob = itemAABB(other.position[0], other.position[1], other.position[2], other)
+    const ohx = (ob.maxX - ob.minX) / 2
+    const ohy = (ob.maxY - ob.minY) / 2
+    const ohz = (ob.maxZ - ob.minZ) / 2
+    const ocx = (ob.minX + ob.maxX) / 2
+    const ocy = (ob.minY + ob.maxY) / 2
+    const ocz = (ob.minZ + ob.maxZ) / 2
+    if (boxesOverlap(cx, cy, cz, hx, hy, hz, ocx, ocy, ocz, ohx, ohy, ohz)) return true
+  }
+  return false
+}
+
 // ─── Store ──────────────────────────────────────────────────────────────────
 
 interface UboxStore {
@@ -293,15 +367,28 @@ export const useStore = create<UboxStore>((set, get) => ({
   // ── Item management ─────────────────────────────────────────────────────
 
   addItem: (item) => {
-    const { activeContainerId } = get()
+    const { activeContainerId, containers } = get()
     if (!activeContainerId) return
+    const container = containers.find((c) => c.id === activeContainerId)
+    if (!container) return
     const id = newItemId()
     const color = item.color || nextColor()
+
+    // Calculate item half-sizes for placement
+    const hx = item.shape === 'cylinder' ? (item.diameter || item.length) / 2 : item.length / 2
+    const hy = item.height / 2
+    const hz = item.shape === 'cylinder' ? (item.diameter || item.length) / 2 : item.width / 2
+
+    // Find a non-overlapping position by scanning the container floor
+    const dims = container.dims
+    const existing = container.items
+    const position = findFreePosition(hx, hz, hy, dims, existing)
+
     const newItem: FurnitureItem = {
       ...item,
       id,
       color,
-      position: [0, item.height / 2, 0],
+      position,
       rotation: [0, 0, 0],
     }
     set((s) => ({
