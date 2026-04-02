@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useStore, PRESETS, UBOX_DEFAULTS, toInches, fromInches, unitLabel, CUBIC_INCHES_PER_CUBIC_FOOT, CM_PER_INCH } from '../store'
 import type { ShapeType, Unit } from '../store'
+import { ContainerTabs } from './ContainerTabs'
 
 const COLOR_SWATCHES = ['#3b82f6', '#ef4444', '#22c55e', '#a855f7', '#f59e0b', '#ec4899', '#06b6d4', '#f97316']
 
@@ -27,31 +28,35 @@ function UnitToggle({ value, onChange, size = 'sm' }: { value: Unit; onChange: (
 }
 
 function ContainerPanel() {
-  const container = useStore((s) => s.container)
+  const containers = useStore((s) => s.containers)
+  const activeContainerId = useStore((s) => s.activeContainerId)
   const containerUnit = useStore((s) => s.containerUnit)
-  const setContainer = useStore((s) => s.setContainer)
+  const setContainerDims = useStore((s) => s.setContainerDims)
   const setContainerUnit = useStore((s) => s.setContainerUnit)
-  const resetContainer = useStore((s) => s.resetContainer)
+  const resetContainerDims = useStore((s) => s.resetContainerDims)
 
-  // Display values in user's chosen unit
-  const displayL = +fromInches(container.length, containerUnit).toFixed(1)
-  const displayW = +fromInches(container.width, containerUnit).toFixed(1)
-  const displayH = +fromInches(container.height, containerUnit).toFixed(1)
+  const activeContainer = containers.find((c) => c.id === activeContainerId)
+  if (!activeContainer) return null
+  const dims = activeContainer.dims
+
+  const displayL = +fromInches(dims.length, containerUnit).toFixed(1)
+  const displayW = +fromInches(dims.width, containerUnit).toFixed(1)
+  const displayH = +fromInches(dims.height, containerUnit).toFixed(1)
 
   const handleChange = (field: 'length' | 'width' | 'height', displayVal: number) => {
     const inches = toInches(displayVal, containerUnit)
-    setContainer({ ...container, [field]: inches })
+    setContainerDims(activeContainer.id, { ...dims, [field]: inches })
   }
 
   const isDefault =
-    container.length === UBOX_DEFAULTS.length &&
-    container.width === UBOX_DEFAULTS.width &&
-    container.height === UBOX_DEFAULTS.height
+    dims.length === UBOX_DEFAULTS.length &&
+    dims.width === UBOX_DEFAULTS.width &&
+    dims.height === UBOX_DEFAULTS.height
 
   return (
     <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-700">
       <div className="flex items-center justify-between mb-2">
-        <h3 className="text-sm font-semibold text-gray-300">Container</h3>
+        <h3 className="text-sm font-semibold text-gray-300">Container Dimensions</h3>
         <UnitToggle value={containerUnit} onChange={setContainerUnit} />
       </div>
 
@@ -90,7 +95,7 @@ function ContainerPanel() {
 
       {!isDefault && (
         <button
-          onClick={resetContainer}
+          onClick={() => resetContainerDims(activeContainer.id)}
           className="text-xs text-amber-400 hover:text-amber-300 transition-colors"
         >
           Reset to U-Box defaults
@@ -102,12 +107,12 @@ function ContainerPanel() {
 
 function AddFurniturePanel() {
   const addItem = useStore((s) => s.addItem)
+  const activeContainerId = useStore((s) => s.activeContainerId)
   const itemUnit = useStore((s) => s.itemUnit)
   const setItemUnit = useStore((s) => s.setItemUnit)
   const [preset, setPreset] = useState('')
   const [name, setName] = useState('')
   const [shape, setShape] = useState<ShapeType>('box')
-  // These are always displayed in itemUnit, stored locally in display unit
   const [length, setLength] = useState(24)
   const [width, setWidth] = useState(24)
   const [height, setHeight] = useState(24)
@@ -115,13 +120,22 @@ function AddFurniturePanel() {
   const [diameter, setDiameter] = useState(12)
   const [color, setColor] = useState(COLOR_SWATCHES[0])
 
+  // Disable if in All mode
+  if (!activeContainerId) {
+    return (
+      <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-700 opacity-50">
+        <h3 className="text-sm font-semibold text-gray-300 mb-2">Add Furniture</h3>
+        <p className="text-xs text-gray-500 italic">Select a container to add items</p>
+      </div>
+    )
+  }
+
   const handlePreset = (presetName: string) => {
     setPreset(presetName)
     const p = PRESETS.find((pr) => pr.name === presetName)
     if (p) {
       setName(p.name)
       setShape(p.shape)
-      // Presets are stored in inches, convert to display unit
       setLength(+fromInches(p.length, itemUnit).toFixed(1))
       setWidth(+fromInches(p.width, itemUnit).toFixed(1))
       setHeight(+fromInches(p.height, itemUnit).toFixed(1))
@@ -130,11 +144,9 @@ function AddFurniturePanel() {
     }
   }
 
-  // When unit changes, convert displayed values
   const handleUnitChange = (newUnit: Unit) => {
     const oldUnit = itemUnit
     if (oldUnit === newUnit) return
-    // Convert current display values: display -> inches -> new display
     const convertVal = (v: number) => +fromInches(toInches(v, oldUnit), newUnit).toFixed(1)
     setLength(convertVal(length))
     setWidth(convertVal(width))
@@ -146,7 +158,6 @@ function AddFurniturePanel() {
 
   const handleAdd = () => {
     if (!name.trim()) return
-    // Convert all display values to inches for internal storage
     const lIn = toInches(shape === 'cylinder' ? diameter : length, itemUnit)
     const wIn = toInches(shape === 'cylinder' ? diameter : width, itemUnit)
     const hIn = toInches(height, itemUnit)
@@ -276,11 +287,18 @@ function AddFurniturePanel() {
 }
 
 function ItemsList() {
-  const items = useStore((s) => s.items)
-  const selectedId = useStore((s) => s.selectedId)
+  const containers = useStore((s) => s.containers)
+  const activeContainerId = useStore((s) => s.activeContainerId)
+  const selectedItemId = useStore((s) => s.selectedItemId)
   const selectItem = useStore((s) => s.selectItem)
   const removeItem = useStore((s) => s.removeItem)
   const itemUnit = useStore((s) => s.itemUnit)
+
+  const isAllMode = activeContainerId === null
+  const activeContainer = containers.find((c) => c.id === activeContainerId)
+  const items = isAllMode
+    ? containers.flatMap((c) => c.items.map((i) => ({ ...i, _containerName: c.name })))
+    : (activeContainer?.items || []).map((i) => ({ ...i, _containerName: '' }))
 
   const fmt = (v: number) => +fromInches(v, itemUnit).toFixed(1)
   const u = unitLabel(itemUnit)
@@ -303,23 +321,30 @@ function ItemsList() {
             key={item.id}
             onClick={() => selectItem(item.id)}
             className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-sm transition-colors ${
-              selectedId === item.id ? 'bg-amber-600/30 border border-amber-500/50' : 'hover:bg-gray-700/50 border border-transparent'
+              selectedItemId === item.id ? 'bg-amber-600/30 border border-amber-500/50' : 'hover:bg-gray-700/50 border border-transparent'
             }`}
           >
             <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: item.color }} />
-            <span className="flex-1 truncate text-gray-200">{item.name}</span>
-            <span className="text-xs text-gray-400">
+            <div className="flex-1 min-w-0">
+              <span className="block truncate text-gray-200">{item.name}</span>
+              {isAllMode && item._containerName && (
+                <span className="block text-[10px] text-gray-500 truncate">{item._containerName}</span>
+              )}
+            </div>
+            <span className="text-xs text-gray-400 shrink-0">
               {item.shape === 'cylinder'
                 ? `${fmt(item.diameter || item.length)}d x ${fmt(item.height)}h ${u}`
                 : `${fmt(item.length)}x${fmt(item.width)}x${fmt(item.height)} ${u}`}
             </span>
-            <button
-              onClick={(e) => { e.stopPropagation(); removeItem(item.id) }}
-              className="text-gray-500 hover:text-red-400 text-xs px-1"
-              title="Remove"
-            >
-              x
-            </button>
+            {!isAllMode && (
+              <button
+                onClick={(e) => { e.stopPropagation(); removeItem(item.id) }}
+                className="text-gray-500 hover:text-red-400 text-xs px-1"
+                title="Remove"
+              >
+                x
+              </button>
+            )}
           </div>
         ))}
       </div>
@@ -328,13 +353,18 @@ function ItemsList() {
 }
 
 function StatsPanel() {
-  const items = useStore((s) => s.items)
-  const uboxCount = useStore((s) => s.uboxCount)
-  const setUboxCount = useStore((s) => s.setUboxCount)
-  const container = useStore((s) => s.container)
+  const containers = useStore((s) => s.containers)
+  const activeContainerId = useStore((s) => s.activeContainerId)
   const containerUnit = useStore((s) => s.containerUnit)
 
-  const totalVolumeCuIn = items.reduce((sum, item) => {
+  const isAllMode = activeContainerId === null
+  const visibleContainers = isAllMode
+    ? containers
+    : containers.filter((c) => c.id === activeContainerId)
+
+  const allItems = visibleContainers.flatMap((c) => c.items)
+
+  const totalVolumeCuIn = allItems.reduce((sum, item) => {
     if (item.shape === 'cylinder') {
       const r = (item.diameter || item.length) / 2
       return sum + Math.PI * r * r * item.height
@@ -349,14 +379,14 @@ function StatsPanel() {
     return sum + item.length * item.width * item.height
   }, 0)
 
-  const containerVolumeCuIn = container.length * container.width * container.height
-  const totalCapacityCuIn = containerVolumeCuIn * uboxCount
+  const totalCapacityCuIn = visibleContainers.reduce(
+    (sum, c) => sum + c.dims.length * c.dims.width * c.dims.height, 0
+  )
   const pct = totalCapacityCuIn > 0 ? Math.min(100, (totalVolumeCuIn / totalCapacityCuIn) * 100) : 0
 
-  // Display volume in appropriate unit
   const isMetric = containerUnit === 'cm'
   const itemsVol = isMetric
-    ? (totalVolumeCuIn * CM_PER_INCH * CM_PER_INCH * CM_PER_INCH / 1_000_000).toFixed(2)  // m^3... too big. Let's use liters
+    ? (totalVolumeCuIn * CM_PER_INCH * CM_PER_INCH * CM_PER_INCH / 1_000_000).toFixed(2)
     : (totalVolumeCuIn / CUBIC_INCHES_PER_CUBIC_FOOT).toFixed(1)
   const capVol = isMetric
     ? (totalCapacityCuIn * CM_PER_INCH * CM_PER_INCH * CM_PER_INCH / 1_000_000).toFixed(2)
@@ -365,12 +395,18 @@ function StatsPanel() {
 
   return (
     <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-700">
-      <h3 className="text-sm font-semibold text-gray-300 mb-2">Stats</h3>
+      <h3 className="text-sm font-semibold text-gray-300 mb-2">
+        Stats {isAllMode ? '(All Containers)' : ''}
+      </h3>
 
       <div className="text-xs text-gray-400 space-y-1.5">
         <div className="flex justify-between">
+          <span>Containers</span>
+          <span className="text-gray-200 font-medium">{visibleContainers.length}</span>
+        </div>
+        <div className="flex justify-between">
           <span>Items</span>
-          <span className="text-gray-200 font-medium">{items.length}</span>
+          <span className="text-gray-200 font-medium">{allItems.length}</span>
         </div>
         <div className="flex justify-between">
           <span>Volume</span>
@@ -388,29 +424,12 @@ function StatsPanel() {
           />
         </div>
       </div>
-
-      <div className="mt-3">
-        <label className="block text-xs text-gray-400 mb-1">Containers</label>
-        <div className="flex gap-1">
-          {[1, 2, 3, 4].map((n) => (
-            <button
-              key={n}
-              onClick={() => setUboxCount(n)}
-              className={`flex-1 px-2 py-1 rounded text-xs font-medium transition-colors ${
-                uboxCount === n ? 'bg-amber-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-              }`}
-            >
-              {n}
-            </button>
-          ))}
-        </div>
-      </div>
     </div>
   )
 }
 
 function ControlsPanel() {
-  const selectedId = useStore((s) => s.selectedId)
+  const selectedItemId = useStore((s) => s.selectedItemId)
   const rotateSelectedAxis = useStore((s) => s.rotateSelectedAxis)
   const deleteSelected = useStore((s) => s.deleteSelected)
   const duplicateSelected = useStore((s) => s.duplicateSelected)
@@ -424,7 +443,6 @@ function ControlsPanel() {
     <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-700">
       <h3 className="text-sm font-semibold text-gray-300 mb-2">Controls</h3>
 
-      {/* Mode toggle */}
       <label className="block text-xs text-gray-400 mb-1">Gizmo Mode (T / R)</label>
       <div className="flex gap-1 mb-2">
         <button
@@ -445,14 +463,13 @@ function ControlsPanel() {
         </button>
       </div>
 
-      {/* 90° rotation buttons */}
       <label className="block text-xs text-gray-400 mb-1">Rotate 90deg</label>
       <div className="grid grid-cols-3 gap-1 mb-2">
         {(['x', 'y', 'z'] as const).map((axis) => (
           <button
             key={axis}
             onClick={() => rotateSelectedAxis(axis)}
-            disabled={!selectedId}
+            disabled={!selectedItemId}
             className={`${btnBase} bg-gray-700 text-gray-300 hover:bg-gray-600 ${btnDisabled}`}
           >
             {axis.toUpperCase()} axis
@@ -460,18 +477,17 @@ function ControlsPanel() {
         ))}
       </div>
 
-      {/* Actions */}
       <div className="grid grid-cols-2 gap-1">
         <button
           onClick={deleteSelected}
-          disabled={!selectedId}
+          disabled={!selectedItemId}
           className={`${btnBase} bg-gray-700 text-gray-300 hover:bg-red-600 hover:text-white ${btnDisabled}`}
         >
           Delete
         </button>
         <button
           onClick={duplicateSelected}
-          disabled={!selectedId}
+          disabled={!selectedItemId}
           className={`${btnBase} bg-gray-700 text-gray-300 hover:bg-gray-600 ${btnDisabled}`}
         >
           Duplicate
@@ -554,9 +570,12 @@ function ProjectHeader() {
 }
 
 export function Sidebar() {
+  const activeContainerId = useStore((s) => s.activeContainerId)
   const rotateSelectedAxis = useStore((s) => s.rotateSelectedAxis)
   const deleteSelected = useStore((s) => s.deleteSelected)
   const setTransformMode = useStore((s) => s.setTransformMode)
+
+  const isAllMode = activeContainerId === null
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -575,7 +594,8 @@ export function Sidebar() {
   return (
     <div className="w-80 shrink-0 bg-gray-900 border-r border-gray-700 flex flex-col h-full overflow-y-auto sidebar-scroll p-3 gap-3">
       <ProjectHeader />
-      <ContainerPanel />
+      <ContainerTabs />
+      {!isAllMode && <ContainerPanel />}
       <AddFurniturePanel />
       <ItemsList />
       <StatsPanel />

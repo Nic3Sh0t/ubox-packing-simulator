@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react'
-import { useStore } from '../store'
-import type { ProjectFile } from '../store'
+import { useStore, UBOX_DEFAULTS } from '../store'
+import type { ProjectFile, FurnitureItem, Container } from '../store'
 
 export function WelcomeScreen() {
   const startNewProject = useStore((s) => s.startNewProject)
@@ -23,9 +23,37 @@ export function WelcomeScreen() {
     const reader = new FileReader()
     reader.onload = (e) => {
       try {
-        const data = JSON.parse(e.target?.result as string) as ProjectFile
-        if (!data.items || !Array.isArray(data.items)) {
-          setError('Invalid project file: missing items array')
+        const raw = JSON.parse(e.target?.result as string)
+
+        // Handle v1 format (flat items array) → convert to v2
+        if (raw.version === undefined || raw.version === 1) {
+          if (!raw.items || !Array.isArray(raw.items)) {
+            setError('Invalid project file: missing items array')
+            return
+          }
+          const items = raw.items as FurnitureItem[]
+          const container: Container = {
+            id: 'c-1',
+            name: 'Container 1',
+            dims: raw.container || { ...UBOX_DEFAULTS },
+            items,
+          }
+          const converted: ProjectFile = {
+            version: 2,
+            projectName: raw.projectName || 'Imported Project',
+            savedAt: raw.savedAt || new Date().toISOString(),
+            containerUnit: raw.containerUnit || 'in',
+            itemUnit: raw.itemUnit || 'in',
+            containers: [container],
+          }
+          loadProject(converted)
+          return
+        }
+
+        // v2 format
+        const data = raw as ProjectFile
+        if (!data.containers || !Array.isArray(data.containers)) {
+          setError('Invalid project file: missing containers array')
           return
         }
         loadProject(data)

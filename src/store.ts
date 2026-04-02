@@ -6,12 +6,10 @@ export type Unit = 'in' | 'cm'
 export const CM_PER_INCH = 2.54
 export const CUBIC_INCHES_PER_CUBIC_FOOT = 1728
 
-/** Convert a value from the given unit to inches (internal unit) */
 export function toInches(value: number, unit: Unit): number {
   return unit === 'cm' ? value / CM_PER_INCH : value
 }
 
-/** Convert a value from inches (internal) to the given display unit */
 export function fromInches(value: number, unit: Unit): number {
   return unit === 'cm' ? value * CM_PER_INCH : value
 }
@@ -20,31 +18,39 @@ export function unitLabel(unit: Unit): string {
   return unit === 'cm' ? 'cm' : 'in'
 }
 
+// ─── Core types ─────────────────────────────────────────────────────────────
+
 export interface FurnitureItem {
   id: string
   name: string
   shape: ShapeType
-  length: number // always inches internally
+  length: number
   width: number
   height: number
   armWidth?: number
   diameter?: number
   color: string
-  position: [number, number, number] // inches
-  rotation: [number, number, number] // Euler XYZ in radians
-  uboxIndex: number
+  position: [number, number, number]
+  rotation: [number, number, number]
 }
 
 export interface ContainerDims {
-  length: number // inches
-  width: number  // inches
-  height: number // inches
+  length: number
+  width: number
+  height: number
+}
+
+export interface Container {
+  id: string
+  name: string
+  dims: ContainerDims
+  items: FurnitureItem[]
 }
 
 export interface Preset {
   name: string
   shape: ShapeType
-  length: number // inches
+  length: number
   width: number
   height: number
   armWidth?: number
@@ -70,64 +76,69 @@ export const PRESETS: Preset[] = [
   { name: 'Bar Stool', shape: 'box', length: 15, width: 15, height: 30 },
 ]
 
-// Default U-Box internal dimensions in inches
 export const UBOX_DEFAULTS: ContainerDims = {
   length: 95,
   width: 56,
   height: 83.5,
 }
 
+// ─── Project file format ────────────────────────────────────────────────────
+
+export interface ProjectFile {
+  version: 2
+  projectName: string
+  savedAt: string
+  containerUnit: Unit
+  itemUnit: Unit
+  containers: Container[]
+}
+
+// ─── Internal counters ──────────────────────────────────────────────────────
+
 const COLORS = ['#3b82f6', '#ef4444', '#22c55e', '#a855f7', '#f59e0b', '#ec4899', '#06b6d4', '#f97316']
 let colorIndex = 0
-
 function nextColor() {
   const c = COLORS[colorIndex % COLORS.length]
   colorIndex++
   return c
 }
 
-let idCounter = 0
+let itemIdCounter = 0
+let containerIdCounter = 0
 
-// ─── Project file format ────────────────────────────────────────────────────
+function newContainerId() { return `c-${++containerIdCounter}` }
+function newItemId() { return `item-${++itemIdCounter}` }
 
-export interface ProjectFile {
-  version: 1
-  projectName: string
-  savedAt: string
-  container: ContainerDims
-  containerUnit: Unit
-  itemUnit: Unit
-  uboxCount: number
-  items: FurnitureItem[]
-}
+// ─── Store ──────────────────────────────────────────────────────────────────
 
 interface UboxStore {
-  // Project state
   projectName: string
-  projectReady: boolean  // false = show welcome screen
+  projectReady: boolean
 
-  items: FurnitureItem[]
-  selectedId: string | null
-  uboxCount: number
-  container: ContainerDims
+  containers: Container[]
+  activeContainerId: string | null  // null = "All" overview mode
+  selectedItemId: string | null
   containerUnit: Unit
   itemUnit: Unit
-
   transformMode: 'translate' | 'rotate'
 
-  // Project actions
+  // Project
   startNewProject: (name?: string) => void
   loadProject: (data: ProjectFile) => void
   exportProject: () => ProjectFile
   setProjectName: (name: string) => void
   returnToWelcome: () => void
 
-  setContainerUnit: (unit: Unit) => void
-  setItemUnit: (unit: Unit) => void
-  setContainer: (dims: ContainerDims) => void
-  resetContainer: () => void
-  setTransformMode: (mode: 'translate' | 'rotate') => void
-  addItem: (item: Omit<FurnitureItem, 'id' | 'position' | 'rotation' | 'uboxIndex' | 'color'> & { color?: string }) => void
+  // Container management
+  addContainer: (name: string) => void
+  removeContainer: (id: string) => void
+  renameContainer: (id: string, name: string) => void
+  setContainerDims: (id: string, dims: ContainerDims) => void
+  setActiveContainer: (id: string | null) => void
+  resetContainerDims: (id: string) => void
+
+  // Item management (operates on active container)
+  addItem: (item: Omit<FurnitureItem, 'id' | 'position' | 'rotation' | 'color'> & { color?: string }) => void
   removeItem: (id: string) => void
   selectItem: (id: string | null) => void
   updateItemPosition: (id: string, position: [number, number, number]) => void
@@ -135,32 +146,45 @@ interface UboxStore {
   rotateSelectedAxis: (axis: 'x' | 'y' | 'z') => void
   duplicateSelected: () => void
   deleteSelected: () => void
-  setUboxCount: (count: number) => void
-  moveItemToUbox: (id: string, uboxIndex: number) => void
+
+  // Settings
+  setContainerUnit: (unit: Unit) => void
+  setItemUnit: (unit: Unit) => void
+  setTransformMode: (mode: 'translate' | 'rotate') => void
+
+  // Helpers
+  getActiveContainer: () => Container | undefined
+  getActiveItems: () => FurnitureItem[]
 }
 
 export const useStore = create<UboxStore>((set, get) => ({
   projectName: '',
   projectReady: false,
-
-  items: [],
-  selectedId: null,
-  uboxCount: 1,
-  container: { ...UBOX_DEFAULTS },
+  containers: [],
+  activeContainerId: null,
+  selectedItemId: null,
   containerUnit: 'in',
   itemUnit: 'in',
   transformMode: 'translate' as 'translate' | 'rotate',
 
+  // ── Project ─────────────────────────────────────────────────────────────
+
   startNewProject: (name) => {
-    idCounter = 0
+    itemIdCounter = 0
+    containerIdCounter = 0
     colorIndex = 0
+    const firstId = newContainerId()
     set({
       projectReady: true,
       projectName: name || 'Untitled Project',
-      items: [],
-      selectedId: null,
-      uboxCount: 1,
-      container: { ...UBOX_DEFAULTS },
+      containers: [{
+        id: firstId,
+        name: 'Container 1',
+        dims: { ...UBOX_DEFAULTS },
+        items: [],
+      }],
+      activeContainerId: firstId,
+      selectedItemId: null,
       containerUnit: 'in',
       itemUnit: 'in',
       transformMode: 'translate',
@@ -168,20 +192,28 @@ export const useStore = create<UboxStore>((set, get) => ({
   },
 
   loadProject: (data) => {
-    // Restore idCounter so new items don't collide
-    const maxId = data.items.reduce((max, item) => {
-      const num = parseInt(item.id.replace('item-', ''), 10)
-      return isNaN(num) ? max : Math.max(max, num)
-    }, 0)
-    idCounter = maxId
-    colorIndex = data.items.length % COLORS.length
+    // Restore counters
+    let maxItem = 0
+    let maxContainer = 0
+    for (const c of data.containers) {
+      const cNum = parseInt(c.id.replace('c-', ''), 10)
+      if (!isNaN(cNum) && cNum > maxContainer) maxContainer = cNum
+      for (const item of c.items) {
+        const iNum = parseInt(item.id.replace('item-', ''), 10)
+        if (!isNaN(iNum) && iNum > maxItem) maxItem = iNum
+      }
+    }
+    itemIdCounter = maxItem
+    containerIdCounter = maxContainer
+    const totalItems = data.containers.reduce((n, c) => n + c.items.length, 0)
+    colorIndex = totalItems % COLORS.length
+
     set({
       projectReady: true,
       projectName: data.projectName || 'Imported Project',
-      items: data.items,
-      selectedId: null,
-      uboxCount: data.uboxCount || 1,
-      container: data.container || { ...UBOX_DEFAULTS },
+      containers: data.containers,
+      activeContainerId: data.containers[0]?.id || null,
+      selectedItemId: null,
       containerUnit: data.containerUnit || 'in',
       itemUnit: data.itemUnit || 'in',
       transformMode: 'translate',
@@ -191,108 +223,188 @@ export const useStore = create<UboxStore>((set, get) => ({
   exportProject: () => {
     const s = get()
     return {
-      version: 1,
+      version: 2,
       projectName: s.projectName,
       savedAt: new Date().toISOString(),
-      container: s.container,
       containerUnit: s.containerUnit,
       itemUnit: s.itemUnit,
-      uboxCount: s.uboxCount,
-      items: s.items,
+      containers: s.containers,
     }
   },
 
   setProjectName: (name) => set({ projectName: name }),
 
-  returnToWelcome: () => {
-    set({ projectReady: false, selectedId: null })
+  returnToWelcome: () => set({ projectReady: false, selectedItemId: null }),
+
+  // ── Container management ────────────────────────────────────────────────
+
+  addContainer: (name) => {
+    const id = newContainerId()
+    const newC: Container = {
+      id,
+      name,
+      dims: { ...UBOX_DEFAULTS },
+      items: [],
+    }
+    set((s) => ({
+      containers: [...s.containers, newC],
+      activeContainerId: id,
+      selectedItemId: null,
+    }))
   },
 
-  setContainerUnit: (unit) => set({ containerUnit: unit }),
-  setItemUnit: (unit) => set({ itemUnit: unit }),
+  removeContainer: (id) => {
+    set((s) => {
+      const filtered = s.containers.filter((c) => c.id !== id)
+      if (filtered.length === 0) return s // don't delete the last one
+      const newActive = s.activeContainerId === id
+        ? filtered[0].id
+        : s.activeContainerId
+      return {
+        containers: filtered,
+        activeContainerId: newActive,
+        selectedItemId: null,
+      }
+    })
+  },
 
-  setContainer: (dims) => set({ container: dims }),
+  renameContainer: (id, name) => {
+    set((s) => ({
+      containers: s.containers.map((c) => c.id === id ? { ...c, name } : c),
+    }))
+  },
 
-  resetContainer: () => set({ container: { ...UBOX_DEFAULTS } }),
+  setContainerDims: (id, dims) => {
+    set((s) => ({
+      containers: s.containers.map((c) => c.id === id ? { ...c, dims } : c),
+    }))
+  },
 
-  setTransformMode: (mode) => set({ transformMode: mode }),
+  setActiveContainer: (id) => set({ activeContainerId: id, selectedItemId: null }),
+
+  resetContainerDims: (id) => {
+    set((s) => ({
+      containers: s.containers.map((c) =>
+        c.id === id ? { ...c, dims: { ...UBOX_DEFAULTS } } : c
+      ),
+    }))
+  },
+
+  // ── Item management ─────────────────────────────────────────────────────
 
   addItem: (item) => {
-    const id = `item-${++idCounter}`
+    const { activeContainerId } = get()
+    if (!activeContainerId) return
+    const id = newItemId()
     const color = item.color || nextColor()
-    const yPos = item.height / 2
     const newItem: FurnitureItem = {
       ...item,
       id,
       color,
-      position: [0, yPos, 0],
+      position: [0, item.height / 2, 0],
       rotation: [0, 0, 0],
-      uboxIndex: 0,
     }
-    set((state) => ({ items: [...state.items, newItem] }))
-  },
-
-  removeItem: (id) => {
-    set((state) => ({
-      items: state.items.filter((i) => i.id !== id),
-      selectedId: state.selectedId === id ? null : state.selectedId,
+    set((s) => ({
+      containers: s.containers.map((c) =>
+        c.id === activeContainerId
+          ? { ...c, items: [...c.items, newItem] }
+          : c
+      ),
     }))
   },
 
-  selectItem: (id) => set({ selectedId: id }),
+  removeItem: (id) => {
+    set((s) => ({
+      containers: s.containers.map((c) => ({
+        ...c,
+        items: c.items.filter((i) => i.id !== id),
+      })),
+      selectedItemId: s.selectedItemId === id ? null : s.selectedItemId,
+    }))
+  },
+
+  selectItem: (id) => set({ selectedItemId: id }),
 
   updateItemPosition: (id, position) => {
-    set((state) => ({
-      items: state.items.map((i) => (i.id === id ? { ...i, position } : i)),
+    set((s) => ({
+      containers: s.containers.map((c) => ({
+        ...c,
+        items: c.items.map((i) => i.id === id ? { ...i, position } : i),
+      })),
     }))
   },
 
   updateItemRotation: (id, rotation) => {
-    set((state) => ({
-      items: state.items.map((i) => (i.id === id ? { ...i, rotation } : i)),
+    set((s) => ({
+      containers: s.containers.map((c) => ({
+        ...c,
+        items: c.items.map((i) => i.id === id ? { ...i, rotation } : i),
+      })),
     }))
   },
 
   rotateSelectedAxis: (axis) => {
-    const { selectedId } = get()
-    if (!selectedId) return
+    const { selectedItemId } = get()
+    if (!selectedItemId) return
     const step = Math.PI / 2
-    set((state) => ({
-      items: state.items.map((i) => {
-        if (i.id !== selectedId) return i
-        const rot: [number, number, number] = [...i.rotation]
-        const idx = axis === 'x' ? 0 : axis === 'y' ? 1 : 2
-        rot[idx] += step
-        return { ...i, rotation: rot }
-      }),
+    set((s) => ({
+      containers: s.containers.map((c) => ({
+        ...c,
+        items: c.items.map((i) => {
+          if (i.id !== selectedItemId) return i
+          const rot: [number, number, number] = [...i.rotation]
+          const idx = axis === 'x' ? 0 : axis === 'y' ? 1 : 2
+          rot[idx] += step
+          return { ...i, rotation: rot }
+        }),
+      })),
     }))
   },
 
   duplicateSelected: () => {
-    const { selectedId, items } = get()
-    if (!selectedId) return
-    const source = items.find((i) => i.id === selectedId)
-    if (!source) return
-    const id = `item-${++idCounter}`
-    const newItem: FurnitureItem = {
-      ...source,
-      id,
-      position: [source.position[0] + 10, source.position[1], source.position[2] + 10],
+    const { selectedItemId, containers } = get()
+    if (!selectedItemId) return
+    // Find which container has this item
+    for (const c of containers) {
+      const source = c.items.find((i) => i.id === selectedItemId)
+      if (!source) continue
+      const id = newItemId()
+      const newItem: FurnitureItem = {
+        ...source,
+        id,
+        position: [source.position[0] + 10, source.position[1], source.position[2] + 10],
+      }
+      set((s) => ({
+        containers: s.containers.map((ct) =>
+          ct.id === c.id ? { ...ct, items: [...ct.items, newItem] } : ct
+        ),
+        selectedItemId: id,
+      }))
+      return
     }
-    set((state) => ({ items: [...state.items, newItem], selectedId: id }))
   },
 
   deleteSelected: () => {
-    const { selectedId } = get()
-    if (!selectedId) return
-    get().removeItem(selectedId)
+    const { selectedItemId } = get()
+    if (!selectedItemId) return
+    get().removeItem(selectedItemId)
   },
 
-  setUboxCount: (count) => set({ uboxCount: count }),
+  // ── Settings ────────────────────────────────────────────────────────────
 
-  moveItemToUbox: (id, uboxIndex) => {
-    set((state) => ({
-      items: state.items.map((i) => (i.id === id ? { ...i, uboxIndex } : i)),
-    }))
+  setContainerUnit: (unit) => set({ containerUnit: unit }),
+  setItemUnit: (unit) => set({ itemUnit: unit }),
+  setTransformMode: (mode) => set({ transformMode: mode }),
+
+  // ── Helpers ─────────────────────────────────────────────────────────────
+
+  getActiveContainer: () => {
+    const { containers, activeContainerId } = get()
+    return containers.find((c) => c.id === activeContainerId)
+  },
+
+  getActiveItems: () => {
+    const c = get().getActiveContainer()
+    return c ? c.items : []
   },
 }))

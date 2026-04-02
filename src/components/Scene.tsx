@@ -9,17 +9,30 @@ import { FurnitureObject } from './FurnitureObject'
 const S = 0.02
 
 export function Scene() {
-  const items = useStore((s) => s.items)
-  const uboxCount = useStore((s) => s.uboxCount)
-  const container = useStore((s) => s.container)
+  const containers = useStore((s) => s.containers)
+  const activeContainerId = useStore((s) => s.activeContainerId)
   const selectItem = useStore((s) => s.selectItem)
   const controlsRef = useRef<any>(null)
 
-  // Calculate offsets using dynamic container width
-  const W = container.width * S
+  const isAllMode = activeContainerId === null
+  const visibleContainers = isAllMode
+    ? containers
+    : containers.filter((c) => c.id === activeContainerId)
+
+  // Calculate side-by-side offsets for All mode
   const gap = 0.3
-  const totalWidth = uboxCount * W + (uboxCount - 1) * gap
-  const getUboxOffset = (index: number) => -totalWidth / 2 + W / 2 + index * (W + gap)
+  const getOffset = (index: number): number => {
+    if (!isAllMode) return 0
+    let offset = 0
+    for (let i = 0; i < index; i++) {
+      offset += visibleContainers[i].dims.width * S + gap
+    }
+    // Center them
+    let totalWidth = 0
+    for (const c of visibleContainers) totalWidth += c.dims.width * S
+    totalWidth += (visibleContainers.length - 1) * gap
+    return offset - totalWidth / 2 + visibleContainers[index].dims.width * S / 2
+  }
 
   const defaultCamera = {
     position: new THREE.Vector3(2.5, 2.0, 2.5),
@@ -38,16 +51,18 @@ export function Scene() {
         <directionalLight position={[5, 10, 5]} intensity={0.8} />
         <directionalLight position={[-3, 5, -3]} intensity={0.3} />
 
-        {Array.from({ length: uboxCount }, (_, i) => (
-          <UboxContainer key={i} index={i} totalCount={uboxCount} />
-        ))}
-
-        {items.map((item) => (
-          <FurnitureObject
-            key={item.id}
-            item={item}
-            uboxOffset={getUboxOffset(item.uboxIndex)}
-          />
+        {visibleContainers.map((c, idx) => (
+          <group key={c.id} position={[getOffset(idx), 0, 0]}>
+            <UboxContainer container={c} showLabel={isAllMode} />
+            {c.items.map((item) => (
+              <FurnitureObject
+                key={item.id}
+                item={item}
+                containerDims={c.dims}
+                otherItems={c.items.filter((i) => i.id !== item.id)}
+              />
+            ))}
+          </group>
         ))}
 
         <OrbitControls
