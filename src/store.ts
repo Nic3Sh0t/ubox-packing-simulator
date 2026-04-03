@@ -132,9 +132,12 @@ function boxesOverlap(
 function findFreePosition(
   hx: number, hz: number, hy: number,
   dims: ContainerDims, existing: FurnitureItem[],
-): [number, number, number] {
-  const step = 4 // scan in 4-inch increments
+): [number, number, number] | null {
+  const step = 2 // scan in 2-inch increments for better precision
   const y = hy // always place on the floor first
+
+  // Check if item even fits in the container at all
+  if (hx * 2 > dims.length || hz * 2 > dims.width || hy * 2 > dims.height) return null
 
   // Try center first
   if (!hasCollision(0, y, 0, hx, hy, hz, existing)) return [0, y, 0]
@@ -146,7 +149,6 @@ function findFreePosition(
     for (let x = -maxX; x <= maxX; x += step) {
       for (let z = -maxZ; z <= maxZ; z += step) {
         if (Math.abs(x) > r && Math.abs(z) > r) continue // expand outward
-        if (x < -maxX || x > maxX || z < -maxZ || z > maxZ) continue
         if (!hasCollision(x, y, z, hx, hy, hz, existing)) return [x, y, z]
       }
     }
@@ -161,8 +163,8 @@ function findFreePosition(
     }
   }
 
-  // Fallback: center (will overlap but user can move it)
-  return [0, y, 0]
+  // No free position found
+  return null
 }
 
 function hasCollision(
@@ -195,6 +197,10 @@ interface UboxStore {
   containerUnit: Unit
   itemUnit: Unit
   transformMode: 'translate' | 'rotate'
+
+  // Toast notification
+  toast: string | null
+  showToast: (msg: string) => void
 
   // Project
   startNewProject: (name?: string) => void
@@ -240,6 +246,11 @@ export const useStore = create<UboxStore>((set, get) => ({
   containerUnit: 'in',
   itemUnit: 'in',
   transformMode: 'translate' as 'translate' | 'rotate',
+  toast: null,
+  showToast: (msg: string) => {
+    set({ toast: msg })
+    setTimeout(() => set({ toast: null }), 3000)
+  },
 
   // ── Project ─────────────────────────────────────────────────────────────
 
@@ -383,6 +394,11 @@ export const useStore = create<UboxStore>((set, get) => ({
     const dims = container.dims
     const existing = container.items
     const position = findFreePosition(hx, hz, hy, dims, existing)
+
+    if (!position) {
+      get().showToast('Container is full — no space for this item')
+      return
+    }
 
     const newItem: FurnitureItem = {
       ...item,

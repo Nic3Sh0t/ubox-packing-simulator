@@ -1,4 +1,5 @@
-import { useRef, useState, useEffect } from 'react'
+import { useRef, useState, useEffect, useCallback } from 'react'
+import { useThree } from '@react-three/fiber'
 import type { ThreeEvent } from '@react-three/fiber'
 import { TransformControls } from '@react-three/drei'
 import * as THREE from 'three'
@@ -172,6 +173,7 @@ export function FurnitureObject({ item, containerDims, otherItems }: FurnitureOb
   const transformRef = useRef<any>(null!)
   const [hovered, setHovered] = useState(false)
   const isDragging = useRef(false)
+  const { controls: orbitControls } = useThree()
 
   const scenePos: [number, number, number] = [
     item.position[0] * S,
@@ -179,9 +181,42 @@ export function FurnitureObject({ item, containerDims, otherItems }: FurnitureOb
     item.position[2] * S,
   ]
 
+  // ── Disable raycast on selected item so clicks pass through to items behind ──
+  useEffect(() => {
+    if (!groupRef.current) return
+    const group = groupRef.current
+    if (isSelected) {
+      // Disable raycasting on all child meshes so clicks go through
+      group.traverse((child) => {
+        if ((child as THREE.Mesh).isMesh) {
+          (child as any)._origRaycast = child.raycast
+          child.raycast = () => {}
+        }
+      })
+      return () => {
+        group.traverse((child) => {
+          if ((child as any)._origRaycast) {
+            child.raycast = (child as any)._origRaycast
+            delete (child as any)._origRaycast
+          }
+        })
+      }
+    }
+  }, [isSelected])
+
+  // ── TransformControls drag handling ──
   useEffect(() => {
     if (!isSelected || !transformRef.current) return
     const controls = transformRef.current
+
+    const onDraggingChanged = (event: { value: boolean }) => {
+      // Enable/disable OrbitControls based on TransformControls dragging state
+      if (orbitControls) (orbitControls as any).enabled = !event.value
+      if (event.value) {
+        isDragging.current = true
+      }
+    }
+
     const onObjectChange = () => {
       if (!groupRef.current) return
       isDragging.current = true
@@ -191,6 +226,7 @@ export function FurnitureObject({ item, containerDims, otherItems }: FurnitureOb
         pos.set(sx * S, sy * S, sz * S)
       }
     }
+
     const onDragEnd = () => {
       if (!groupRef.current || !isDragging.current) return
       isDragging.current = false
@@ -202,28 +238,48 @@ export function FurnitureObject({ item, containerDims, otherItems }: FurnitureOb
         updateItemRotation(item.id, [rot.x, rot.y, rot.z])
       }
     }
+
+    controls.addEventListener('dragging-changed', onDraggingChanged)
     controls.addEventListener('objectChange', onObjectChange)
     controls.addEventListener('mouseUp', onDragEnd)
     return () => {
+      controls.removeEventListener('dragging-changed', onDraggingChanged)
       controls.removeEventListener('objectChange', onObjectChange)
       controls.removeEventListener('mouseUp', onDragEnd)
+      // Safety: always re-enable OrbitControls when TransformControls unmounts
+      if (orbitControls) (orbitControls as any).enabled = true
     }
-  }, [isSelected, item, containerDims, otherItems, updateItemPosition, updateItemRotation, transformMode])
+  }, [isSelected, item, containerDims, otherItems, updateItemPosition, updateItemRotation, transformMode, orbitControls])
 
-  const onPointerDown = (e: ThreeEvent<PointerEvent>) => {
-    e.stopPropagation()
-    // Only select on left mouse button, and skip if clicking the gizmo itself
+  // ── Pointer handlers ──
+  const onPointerDown = useCallback((e: ThreeEvent<PointerEvent>) => {
+    // Only left button
     if (e.button !== 0) return
-    if (!isSelected) selectItem(item.id)
-  }
+    e.stopPropagation()
+    selectItem(item.id)
+  }, [item.id, selectItem])
+
+  const onPointerOver = useCallback((e: ThreeEvent<PointerEvent>) => {
+    // Only highlight if this is the first (nearest) intersected object
+    if (e.intersections.length > 0 && e.intersections[0].object !== e.object &&
+        !e.eventObject.getObjectById(e.intersections[0].object.id)) {
+      return
+    }
+    setHovered(true)
+  }, [])
+
+  const onPointerOut = useCallback(() => {
+    setHovered(false)
+  }, [])
+
   const Shape = item.shape === 'lshape' ? LShapeShape : item.shape === 'cylinder' ? CylinderShape : BoxShape
 
   return (
     <>
       <group ref={groupRef} position={scenePos} rotation={item.rotation}
         onPointerDown={onPointerDown}
-        onPointerOver={(e) => { e.stopPropagation(); setHovered(true) }}
-        onPointerOut={() => setHovered(false)}
+        onPointerOver={onPointerOver}
+        onPointerOut={onPointerOut}
       >
         <Shape item={item} highlight={isSelected || hovered} />
       </group>
